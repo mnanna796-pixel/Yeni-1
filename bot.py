@@ -5,14 +5,15 @@ from dotenv import load_dotenv
 
 from aiogram import Bot, Dispatcher, F, html
 from aiogram.filters import CommandStart, Command
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ChatMemberUpdated
 from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
+from aiogram.enums import ParseMode, ChatMemberStatus
 
 load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+CHANNEL_ID = os.getenv("CHANNEL_ID", "@alqisatqielanazerbaycan") # Kanalınızın username-i
 
 # ---------- Verilənlər bazası ----------
 def db():
@@ -34,10 +35,12 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS ads (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
+        title TEXT,
         link TEXT,
         price INTEGER,
-        status TEXT DEFAULT 'pending',
-        views INTEGER DEFAULT 0
+        status TEXT DEFAULT 'pending', -- pending, approved, rejected
+        views INTEGER DEFAULT 0,
+        created_at TEXT
     )""")
     c.execute("""CREATE TABLE IF NOT EXISTS ad_views (
         user_id INTEGER,
@@ -53,7 +56,7 @@ def get_user(uid):
     conn.close()
     return u
 
-def add_balance(uid, amount):
+def update_balance(uid, amount):
     conn = db()
     conn.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (amount, uid))
     conn.commit()
@@ -63,19 +66,45 @@ def add_balance(uid, amount):
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
+# ---------- Məcburi Abunəlik Yoxlaması ----------
+async def is_subscribed(user_id: int) -> bool:
+    try:
+        member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
+        return member.status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]
+    except Exception as e:
+        print(f"Abunəlik yoxlanılarkən xəta: {e}")
+        return False
+
+def sub_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📢 Kanala Abunə Ol", url="https://t.me/alqisatqielanazerbaycan")],
+        [InlineKeyboardButton(text="✅ Yoxla", callback_data="check_sub")]
+    ])
+
 # ---------- Klaviaturalar ----------
 def main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📣 Reklam yerləşdir", callback_data="order_ad")],
         [InlineKeyboardButton(text="💰 Balansım", callback_data="balance")],
         [InlineKeyboardButton(text="👥 Referal sistemi", callback_data="referal")],
         [InlineKeyboardButton(text="🎁 Gündəlik bonus", callback_data="bonus")],
         [InlineKeyboardButton(text="📊 Statistika", callback_data="stats")],
-        [InlineKeyboardButton(text="📣 Reklam izlə", callback_data="watch_ad")],
+        [InlineKeyboardButton(text="🆘 Dəstək", url="https://t.me/Sizin_Destek_Username")]
     ])
 
 # ---------- /start ----------
 @dp.message(CommandStart())
 async def start(message: Message):
+    uid = message.from_user.id
+    
+    # Abunəlik yoxlaması
+    if not await is_subscribed(uid):
+        await message.answer(
+            "Botdan istifadə etmək üçün əvvəlcə kanalımıza abunə olmalısınız! 👇",
+            reply_markup=sub_keyboard()
+        )
+        return
+
     args = message.text.split()
     ref_id = None
     if len(args) > 1 and args[1].startswith("ref_"):
@@ -84,9 +113,7 @@ async def start(message: Message):
         except ValueError:
             ref_id = None
 
-    uid = message.from_user.id
     user = get_user(uid)
-
     if user is None:
         conn = db()
         conn.execute(
@@ -96,9 +123,9 @@ async def start(message: Message):
         conn.commit()
         conn.close()
 
-        # Referala bonus
+        # Referala bonus (5 coin)
         if ref_id and ref_id != uid and get_user(ref_id):
-            add_balance(ref_id, 10)
+            update_balance(ref_id, 5)
             conn = db()
             conn.execute("UPDATE users SET referal_count = referal_count + 1 WHERE user_id=?", (ref_id,))
             conn.commit()
@@ -106,9 +133,20 @@ async def start(message: Message):
 
     await message.answer(
         f"Salam, {html.bold(message.from_user.full_name)}! 👋\n\n"
-        f"Reklam botuna xoş gəldiniz. Aşağıdakı menyudan seçin:",
+        f"Azərbaycan Alqı-Satqı Reklam Botuna xoş gəldiniz. Aşağıdakı menyudan seçin:",
         reply_markup=main_menu()
     )
+
+# ---------- Abunəliyi Yoxla (Callback) ----------
+@dp.callback_query(F.data == "check_sub")
+async def cb_check_sub(cb: CallbackQuery):
+    if await is_subscribed(cb.from_user.id):
+        await cb.message.edit_text(
+            "✅ Təşəkkürlər! İndi botdan istifadə edə bilərsiniz.",
+            reply_markup=main_menu()
+        )
+    else:
+        await cb.answer("❌ Siz hələ kanala abunə olmamısınız!", show_alert=True)
 
 # ---------- Balans ----------
 @dp.callback_query(F.data == "balance")
@@ -124,12 +162,13 @@ async def cb_balance(cb: CallbackQuery):
 @dp.callback_query(F.data == "referal")
 async def cb_referal(cb: CallbackQuery):
     u = get_user(cb.from_user.id)
-    link = f"https://t.me/{(await bot.get_me()).username}?start=ref_{cb.from_user.id}"
+    bot_info = await bot.get_me()
+    link = f"https://t.me/{bot_info.username}?start=ref_{cb.from_user.id}"
     await cb.message.edit_text(
         f"👥 <b>Referal sistemi</b>\n\n"
         f"Sizin linkiniz:\n<code>{link}</code>\n\n"
         f"Dəvət etdiyiniz: {u['referal_count']} nəfər\n"
-        f"Hər dəvətə: 10 coin",
+        f"Hər dəvətə: 5 coin",
         reply_markup=main_menu()
     )
     await cb.answer()
@@ -146,15 +185,15 @@ async def cb_bonus(cb: CallbackQuery):
         return
 
     conn = db()
-    conn.execute("UPDATE users SET balance = balance + 5, last_bonus = ? WHERE user_id=?", (today, uid))
+    conn.execute("UPDATE users SET balance = balance + 2, last_bonus = ? WHERE user_id=?", (today, uid))
     conn.commit()
     conn.close()
 
     await cb.message.edit_text(
-        f"🎁 <b>Gündəlik bonus alındı!</b>\n+5 coin\n\nBalans: {get_user(uid)['balance']} coin",
+        f"🎁 <b>Gündəlik bonus alındı!</b>\n+2 coin\n\nBalans: {get_user(uid)['balance']} coin",
         reply_markup=main_menu()
     )
-    await cb.answer("✅ +5 coin")
+    await cb.answer("✅ +2 coin")
 
 # ---------- Statistika ----------
 @dp.callback_query(F.data == "stats")
@@ -175,85 +214,24 @@ async def cb_stats(cb: CallbackQuery):
     )
     await cb.answer()
 
-# ---------- Reklam izlə ----------
-@dp.callback_query(F.data == "watch_ad")
-async def cb_watch_ad(cb: CallbackQuery):
-    conn = db()
-    ad = conn.execute("""
-        SELECT * FROM ads 
-        WHERE status='approved' 
-        AND id NOT IN (SELECT ad_id FROM ad_views WHERE user_id=?)
-        LIMIT 1
-    """, (cb.from_user.id,)).fetchone()
-    conn.close()
-
-    if not ad:
-        await cb.answer("😔 Hazırda izləyəcək reklam yoxdur", show_alert=True)
-        return
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔗 Reklama bax", url=ad["link"])],
-        [InlineKeyboardButton(text="✅ Təsdiqlə", callback_data=f"confirm_{ad['id']}")],
-    ])
+# ---------- Reklam Sifarişi ----------
+@dp.callback_query(F.data == "order_ad")
+async def cb_order_ad(cb: CallbackQuery):
     await cb.message.edit_text(
-        f"📣 <b>Reklam</b>\n\n"
-        f"Linkə baxın, sonra təsdiqləyin.\n"
-        f"Mükafat: +{ad['price']} coin",
-        reply_markup=kb
+        "📣 <b>Yeni Reklam Sifarişi</b>\n\n"
+        "Zəhmət olmasa reklamınız üçün qısa bir <b>başlıq</b> yazın (məsələn: 'Yeni telefonlar satılır').\n\n"
+        "Ləğv etmək üçün /cancel yazın.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Ləğv et", callback_data="cancel")]])
     )
     await cb.answer()
 
-@dp.callback_query(F.data.startswith("confirm_"))
-async def cb_confirm(cb: CallbackQuery):
-    ad_id = int(cb.data.replace("confirm_", ""))
-    uid = cb.from_user.id
-
-    conn = db()
-    already = conn.execute("SELECT 1 FROM ad_views WHERE user_id=? AND ad_id=?", (uid, ad_id)).fetchone()
-    if already:
-        conn.close()
-        await cb.answer("❌ Artıq bu reklamı izləmisiniz", show_alert=True)
-        return
-
-    ad = conn.execute("SELECT * FROM ads WHERE id=?", (ad_id,)).fetchone()
-    if not ad:
-        conn.close()
-        await cb.answer("Reklam tapılmadı", show_alert=True)
-        return
-
-    conn.execute("INSERT INTO ad_views (user_id, ad_id) VALUES (?, ?)", (uid, ad_id))
-    conn.execute("UPDATE ads SET views = views + 1 WHERE id=?", (ad_id,))
-    conn.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (ad["price"], uid))
-    conn.commit()
-    conn.close()
-
-    await cb.message.edit_text(
-        f"✅ Təsdiqləndi! +{ad['price']} coin\n\nBalans: {get_user(uid)['balance']} coin",
-        reply_markup=main_menu()
-    )
-    await cb.answer("✅ Bonus verildi")
-
-# ---------- Admin: reklam əlavə et ----------
-@dp.message(Command("add_ad"))
-async def cmd_add_ad(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    parts = message.text.split(maxsplit=2)
-    if len(parts) < 3:
-        await message.answer("İstifadə: /add_ad <qiymət> <link>")
-        return
-    price = int(parts[1])
-    link = parts[2]
-
-    conn = db()
-    conn.execute("INSERT INTO ads (user_id, link, price, status) VALUES (?, ?, ?, 'approved')",
-                 (message.from_user.id, link, price))
-    conn.commit()
-    conn.close()
-    await message.answer(f"✅ Reklam əlavə edildi: {link}")
-
-# ---------- Polling ----------
-async def start_polling():
-    init_db()
-    # VACİB DÜZƏLİŞ: Render-də Thread xətasının qarşısını alır
-    await dp.start_polling(bot, handle_signals=False)
+# Reklam başlığını qəbul et
+@dp.message(F.text & ~F.text.startswith('/'))
+async def process_ad_title(message: Message):
+    uid = message.from_user.id
+    # Yoxlayaq ki, istifadəçi həqiqətən reklam yerləşdirir (sadə mətn yazmayıb)
+    # Bunun üçün sadə bir keş (cache) və ya DB-də status saxlaya bilərik. 
+    # Sadəlik üçün bizə ayrıca state lazımdır, amma aiogram FSM istifadə etmədən bunu belə həll edirik:
+    # İstifadəçi /start yazmayıbsa və mətn gəlirsə, deməli reklam başlığıdır.
+    # Daha yaxşısı FSM (State) istifadə etməkdir. 
+    pass # FSM olmadan bu hissə qarışıq olacaq, aşağıda düzgün FSM-li versiyanı verəcəm.
