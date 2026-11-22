@@ -32,13 +32,11 @@ def init_db():
         user_id INTEGER PRIMARY KEY, full_name TEXT, balance INTEGER DEFAULT 0,
         referal_id INTEGER, referal_count INTEGER DEFAULT 0, last_bonus TEXT
     )""")
-    # Bot Reklamı (Tapşırıqlar)
     c.execute("""CREATE TABLE IF NOT EXISTS bot_ads (
         id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, title TEXT, link TEXT, 
         reward INTEGER, max_users INTEGER, current_users INTEGER DEFAULT 0, 
         status TEXT DEFAULT 'pending', created_at TEXT
     )""")
-    # Kanal Reklamı
     c.execute("""CREATE TABLE IF NOT EXISTS channel_ads (
         id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, content TEXT, 
         price INTEGER, duration_hours INTEGER, status TEXT DEFAULT 'pending', 
@@ -84,12 +82,6 @@ class AdminReply(StatesGroup):
     user_id = State()
     message = State()
 
-class AdminAddTask(StatesGroup):
-    title = State()
-    link = State()
-    reward = State()
-    limit = State()
-
 # ---------- Məcburi Abunəlik ----------
 async def is_subscribed(user_id: int) -> bool:
     try:
@@ -124,7 +116,6 @@ def admin_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📊 Ümumi Statistika", callback_data="admin_stats")],
         [InlineKeyboardButton(text="💰 Coin Əlavə Et", callback_data="admin_add_coin")],
-        [InlineKeyboardButton(text="💬 Dəstək Müraciətləri", callback_data="admin_support")],
         [InlineKeyboardButton(text="🔙 Geri", callback_data="back_main")]
     ])
 
@@ -177,12 +168,14 @@ async def cb_back_main(cb: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "balance")
 async def cb_balance(cb: CallbackQuery):
     u = get_user(cb.from_user.id)
+    if not u: return await cb.answer("Zəhmət olmasa /start yazın!", show_alert=True)
     await cb.message.edit_text(f"💰 <b>Balansınız:</b> {u['balance']} coin", reply_markup=main_menu(cb.from_user.id))
     await cb.answer()
 
 @dp.callback_query(F.data == "referal")
 async def cb_referal(cb: CallbackQuery):
     u = get_user(cb.from_user.id)
+    if not u: return await cb.answer("Zəhmət olmasa /start yazın!", show_alert=True)
     bot_info = await bot.get_me()
     link = f"https://t.me/{bot_info.username}?start=ref_{cb.from_user.id}"
     await cb.message.edit_text(f"👥 <b>Referal sistemi</b>\n\nSizin linkiniz:\n<code>{link}</code>\n\nDəvət etdiyiniz: {u['referal_count']} nəfər\nHər dəvətə: 5 coin", reply_markup=main_menu(cb.from_user.id))
@@ -192,6 +185,8 @@ async def cb_referal(cb: CallbackQuery):
 async def cb_bonus(cb: CallbackQuery):
     uid = cb.from_user.id
     u = get_user(uid)
+    if not u: return await cb.answer("Zəhmət olmasa /start yazın!", show_alert=True)
+    
     today = date.today().isoformat()
     if u["last_bonus"] == today:
         await cb.answer("❌ Bu gün artıq bonus almısınız!", show_alert=True)
@@ -212,6 +207,8 @@ async def cb_rules(cb: CallbackQuery):
 @dp.callback_query(F.data == "bot_ad")
 async def cb_bot_ad(cb: CallbackQuery, state: FSMContext):
     u = get_user(cb.from_user.id)
+    if not u: return await cb.answer("Zəhmət olmasa /start yazın!", show_alert=True)
+    
     if u['balance'] < 15:
         await cb.answer("❌ Balansınız kifayət etmir! Minimum 15 coin lazımdır.", show_alert=True)
         return
@@ -270,7 +267,8 @@ async def cb_confirm_bot_ad(cb: CallbackQuery, state: FSMContext):
     conn.close()
     
     await state.clear()
-    await cb.message.edit_text("✅ Reklam sifarişiniz qəbul edildi! Admin təsdiqlədikdən sonra "Tapşırıqlar" bölməsində yayımlanacaq.", reply_markup=main_menu(uid))
+    # DÜZƏLİŞ: Qoşa dırnaqlar tək dırnaqla əvəz olundu
+    await cb.message.edit_text("✅ Reklam sifarişiniz qəbul edildi! Admin təsdiqlədikdən sonra 'Tapşırıqlar' bölməsində yayımlanacaq.", reply_markup=main_menu(uid))
     
     try:
         admin_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -284,6 +282,8 @@ async def cb_confirm_bot_ad(cb: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "channel_ad")
 async def cb_channel_ad(cb: CallbackQuery, state: FSMContext):
     u = get_user(cb.from_user.id)
+    if not u: return await cb.answer("Zəhmət olmasa /start yazın!", show_alert=True)
+    
     if u['balance'] < 10:
         await cb.answer("❌ Balansınız kifayət etmir! Minimum 10 coin lazımdır.", show_alert=True)
         return
@@ -312,7 +312,6 @@ async def process_chad_content(message: Message, state: FSMContext):
     data = await state.get_data()
     uid = message.from_user.id
     
-    # Mətni və ya medianı götürürük
     content = message.text if message.text else message.caption
     if not content: 
         return await message.answer("Zəhmət olmasa mətn və ya şəkil göndərin.")
@@ -378,7 +377,6 @@ async def cb_chk_task(cb: CallbackQuery):
         conn.close()
         return await cb.answer("❌ Bu tapşırığı artıq etmisiniz.", show_alert=True)
         
-    # Qeydiyyat və balans artırma
     conn.execute("INSERT INTO task_completions (user_id, ad_id) VALUES (?, ?)", (uid, task_id))
     conn.execute("UPDATE bot_ads SET current_users = current_users + 1 WHERE id=?", (task_id,))
     conn.commit()
@@ -386,7 +384,6 @@ async def cb_chk_task(cb: CallbackQuery):
     
     update_balance(uid, task['reward'])
     
-    # Əgər limit dolubsa, tapşırığı bağlayırıq
     if task['current_users'] + 1 >= task['max_users']:
         conn = db()
         conn.execute("UPDATE bot_ads SET status='completed' WHERE id=?", (task_id,))
@@ -438,9 +435,32 @@ async def cb_admin_stats(cb: CallbackQuery):
 @dp.callback_query(F.data == "admin_add_coin")
 async def cb_admin_add_coin(cb: CallbackQuery, state: FSMContext):
     if cb.from_user.id != ADMIN_ID: return
-    await state.set_state(AdminAddTask.title) # Müvəqqəti istifadə
+    await state.set_state(AdminReply.user_id)
     await cb.message.edit_text("👤 İstifadəçinin <b>ID</b> nömrəsini yazın:")
     await cb.answer()
+
+@dp.message(AdminReply.user_id)
+async def admin_coin_uid(message: Message, state: FSMContext):
+    if not message.text.isdigit(): return await message.answer("Yalnız rəqəm yazın.")
+    await state.update_data(target_uid=int(message.text))
+    await message.answer("💰 Əlavə etmək istədiyiniz <b>coin</b> miqdarını yazın:")
+    await state.set_state(AdminReply.message)
+
+@dp.message(AdminReply.message)
+async def admin_coin_amount(message: Message, state: FSMContext):
+    if not message.text.lstrip('-').isdigit(): return await message.answer("Yalnız rəqəm yazın.")
+    data = await state.get_data()
+    target_uid = data.get('target_uid')
+    amount = int(message.text)
+    await state.clear()
+    
+    if get_user(target_uid):
+        update_balance(target_uid, amount)
+        await message.answer(f"✅ İstifadəçiyə (ID: {target_uid}) {amount} coin əlavə edildi.", reply_markup=main_menu(message.from_user.id))
+        try: await bot.send_message(target_uid, f"💰 Balansınıza admin tərəfindən {amount} coin əlavə edildi!")
+        except: pass
+    else:
+        await message.answer("❌ İstifadəçi tapılmadı.", reply_markup=main_menu(message.from_user.id))
 
 # (Admin Cavab Yaratma)
 @dp.callback_query(F.data.startswith("reply_"))
@@ -452,18 +472,6 @@ async def cb_admin_reply(cb: CallbackQuery, state: FSMContext):
     await cb.message.answer("✍️ İstifadəçiyə cavabınızı yazın:")
     await cb.answer()
 
-@dp.message(AdminReply.message)
-async def process_admin_reply(message: Message, state: FSMContext):
-    data = await state.get_data()
-    target_uid = data['target_uid']
-    await state.clear()
-    
-    try:
-        await bot.send_message(target_uid, f"💬 <b>Admin Cavabı:</b>\n\n{message.text}")
-        await message.answer("✅ Cavab istifadəçiyə göndərildi.", reply_markup=main_menu(message.from_user.id))
-    except:
-        await message.answer("❌ İstifadəçiyə mesaj getmədi (botu bloklayıb).", reply_markup=main_menu(message.from_user.id))
-
 # Admin Təsdiqləmə (Bot Reklamı)
 @dp.callback_query(F.data.startswith("app_botad_"))
 async def cb_app_botad(cb: CallbackQuery):
@@ -473,7 +481,7 @@ async def cb_app_botad(cb: CallbackQuery):
     conn.execute("UPDATE bot_ads SET status='approved' WHERE id=?", (ad_id,))
     conn.commit()
     conn.close()
-    await cb.message.edit_text(f"✅ Tapşırıq reklamı (ID: {ad_id}) təsdiqləndi və "Tapşırıqlar" bölməsinə əlavə edildi.")
+    await cb.message.edit_text(f"✅ Tapşırıq reklamı (ID: {ad_id}) təsdiqləndi və 'Tapşırıqlar' bölməsinə əlavə edildi.")
     await cb.answer()
 
 # Admin Rədd Etmə (Bot Reklamı - Pulu qaytar)
@@ -507,7 +515,6 @@ async def cleaner_worker():
                 if ad['expire_at']:
                     expire = datetime.fromisoformat(ad['expire_at'])
                     if now >= expire:
-                        # Vaxt bitib, kanaldan sil
                         try:
                             await bot.delete_message(chat_id=CHANNEL_ID, message_id=ad['channel_message_id'])
                         except: pass
@@ -516,10 +523,10 @@ async def cleaner_worker():
             conn.close()
         except Exception as e:
             print(f"Təmizləyici xətası: {e}")
-        await asyncio.sleep(60) # Hər dəqiqə yoxla
+        await asyncio.sleep(60)
 
 # ---------- Polling ----------
 async def start_polling():
     init_db()
-    asyncio.create_task(cleaner_worker()) # Arxa planda təmizləyicini başlat
+    asyncio.create_task(cleaner_worker())
     await dp.start_polling(bot, handle_signals=False)
