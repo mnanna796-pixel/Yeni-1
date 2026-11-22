@@ -1,7 +1,3 @@
-"""
-Reklam Coin — Telegram reklam botu (aiogram 3.x) — TAM İŞLƏK VERSİYA
-"""
-
 import asyncio
 import logging
 import os
@@ -74,7 +70,6 @@ def init_db() -> None:
         conn.execute("""CREATE TABLE IF NOT EXISTS task_completions (
             user_id INTEGER, ad_id INTEGER, PRIMARY KEY (user_id, ad_id)
         )""")
-        # Admin test balansı
         row = conn.execute("SELECT balance FROM users WHERE user_id=?", (ADMIN_ID,)).fetchone()
         if not row:
             conn.execute("INSERT INTO users (user_id, full_name, balance) VALUES (?, ?, ?)", (ADMIN_ID, "Admin", 5000))
@@ -335,7 +330,7 @@ async def cb_confirm_bot_ad(cb: CallbackQuery, state: FSMContext):
             "VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
             (uid, data["title"], data["link"], data["reward"], data["max_users"], price, datetime.now().isoformat()),
         )
-        ad_id = cur.lastrowid
+        ad_id = cur.lastrowid  # ✅ DÜZƏLİŞ: conn deyil, cur
         conn.commit()
 
     await state.clear()
@@ -650,11 +645,11 @@ async def cleaner_worker():
         await asyncio.sleep(60)
 
 # ---------- START ----------
-async def main():
+async def start_polling():
     init_db()
     asyncio.create_task(cleaner_worker())
     logger.info("Bot işə düşür...")
     await dp.start_polling(bot, handle_signals=False)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(start_polling())
