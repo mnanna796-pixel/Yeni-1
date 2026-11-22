@@ -255,4 +255,5 @@ async def cmd_add_ad(message: Message):
 # ---------- Polling ----------
 async def start_polling():
     init_db()
-    await dp.start_polling(bot)
+    # VACİB DÜZƏLİŞ: Render-də Thread xətasının qarşısını alır
+    await dp.start_polling(bot, handle_signals=False)
