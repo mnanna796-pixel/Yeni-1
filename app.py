@@ -2,7 +2,7 @@ import os
 import threading
 import asyncio
 from flask import Flask
-from bot import dp, bot, start_polling
+from bot import start_polling
 
 app = Flask(__name__)
 
